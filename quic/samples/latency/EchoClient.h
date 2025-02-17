@@ -356,7 +356,7 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
   void loadFileIntoMemory() {
     // Open the file
     // LOG(INFO) << "Loading File";
-    std::ifstream file("./test_input.txt", std::ios::binary);
+    std::ifstream file("../../../../research/test_input.txt", std::ios::binary);
     if (!file.is_open()) {
       LOG(ERROR) << "Failed to open file";
       return;
@@ -389,11 +389,11 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
     // Record the send timestamp with the file ID
     auto sendTimeNs = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     {
-        std::ofstream outFile("sent_timestamp.txt", std::ios::app);
+        std::ofstream outFile("../../../../research/log_sent_timestamp.txt", std::ios::app);
         outFile << "FileID: " << fileId << " SendTime: " << sendTimeNs << " ns" << std::endl;
     }
     sendMessage(streamId, pendingOutput_[streamId]);
-    LOG(INFO) << "Sent message on streamID=" << streamId;
+    // LOG(INFO) << "Sent message on streamID=" << streamId;
   }
 
 

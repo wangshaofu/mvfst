@@ -204,7 +204,7 @@ class EchoHandler : public quic::QuicSocket::ConnectionSetupCallback,
         // Record the receive timestamp
         auto receiveTimeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         {
-          std::ofstream outFile("received_timestamp.txt", std::ios::app);
+          std::ofstream outFile("../../../../research/log_received_timestamp.txt", std::ios::app);
           outFile << "FileID: " << fileId << " ReceiveTime: " << receiveTimeNs << " ns" << std::endl;
         }
   
