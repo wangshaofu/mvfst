@@ -19,16 +19,18 @@ foreach(header ${QUIC_API_HEADERS_TOINSTALL})
 endforeach()
 
 add_executable(echo echo/main.cpp)
+add_executable(latency latency/main.cpp)
 
 target_compile_options(
-  echo
-  PRIVATE
-  ${_QUIC_COMMON_COMPILE_OPTIONS}
+  echo PRIVATE ${_QUIC_COMMON_COMPILE_OPTIONS}
+)
+target_compile_options(
+  latency PRIVATE ${_QUIC_COMMON_COMPILE_OPTIONS}
 )
 
 target_link_libraries(
-  echo PUBLIC
-  mvfst_test_utils
-  ${GFLAGS_LIBRARIES}
-  ${LIBGMOCK_LIBRARIES}
+  echo PUBLIC mvfst_test_utils ${GFLAGS_LIBRARIES}
+)
+target_link_libraries(
+  latency PUBLIC mvfst_test_utils ${GFLAGS_LIBRARIES}
 )
