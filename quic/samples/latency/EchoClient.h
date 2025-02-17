@@ -187,12 +187,12 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
     }
   }
 
-  void onStreamWriteReady(quic::StreamId id, uint64_t maxToSend) noexcept
-      override {
-    LOG(INFO) << "EchoClient socket is write ready with maxToSend="
-              << maxToSend;
-    sendMessage(id, pendingOutput_[id]);
-  }
+  // void onStreamWriteReady(quic::StreamId id, uint64_t maxToSend) noexcept
+  //     override {
+  //   LOG(INFO) << "EchoClient socket is write ready with maxToSend="
+  //             << maxToSend;
+  //   sendMessage(id, pendingOutput_[id]);
+  // }
 
   void onStreamWriteError(quic::StreamId id, QuicError error) noexcept
       override {
@@ -265,61 +265,50 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
     }
 
     // Send the file
-    evb->runInEventBaseThreadAndWait([this, evb] { scheduleSends(evb); });
+    scheduleSends(evb);
+    
+    // std::string message;
+    // bool closed = false;
+    // auto client = quicClient_;
 
-    std::string message;
-    bool closed = false;
-    auto client = quicClient_;
+    // if (enableStreamGroups_) {
+    //   // Generate two groups.
+    //   for (size_t i = 0; i < kNumTestStreamGroups; ++i) {
+    //     auto groupId = quicClient_->createBidirectionalStreamGroup();
+    //     CHECK(groupId.hasValue())
+    //         << "Failed to generate a stream group: " << groupId.error();
+    //     streamGroups_[i] = *groupId;
+    //   }
+    // }
 
-    if (enableStreamGroups_) {
-      // Generate two groups.
-      for (size_t i = 0; i < kNumTestStreamGroups; ++i) {
-        auto groupId = quicClient_->createBidirectionalStreamGroup();
-        CHECK(groupId.hasValue())
-            << "Failed to generate a stream group: " << groupId.error();
-        streamGroups_[i] = *groupId;
-      }
+    // auto sendMessageInStream = [&]() {
+    //   if (message == "/close") {
+    //     quicClient_->close(none);
+    //     closed = true;
+    //     return;
+    //   }
+
+    //   // create new stream for each message
+    //   auto streamId = client->createBidirectionalStream().value();
+    //   client->setReadCallback(streamId, this);
+    //   pendingOutput_[streamId].append(folly::IOBuf::copyBuffer(message));
+    //   sendMessage(streamId, pendingOutput_[streamId], 0);
+    // };
+
+    // auto sendMessageInStreamGroup = [&]() {
+    //   // create new stream for each message
+    //   auto streamId =
+    //       client->createBidirectionalStreamInGroup(getNextGroupId());
+    //   CHECK(streamId.hasValue())
+    //       << "Failed to generate stream id in group: " << streamId.error();
+    //   client->setReadCallback(*streamId, this);
+    //   pendingOutput_[*streamId].append(folly::IOBuf::copyBuffer(message));
+    //   sendMessage(*streamId, pendingOutput_[*streamId], 0);
+    // };
+
+    while(true){
+      continue;
     }
-
-    auto sendMessageInStream = [&]() {
-      if (message == "/close") {
-        quicClient_->close(none);
-        closed = true;
-        return;
-      }
-
-      // create new stream for each message
-      auto streamId = client->createBidirectionalStream().value();
-      client->setReadCallback(streamId, this);
-      pendingOutput_[streamId].append(folly::IOBuf::copyBuffer(message));
-      sendMessage(streamId, pendingOutput_[streamId]);
-    };
-
-    auto sendMessageInStreamGroup = [&]() {
-      // create new stream for each message
-      auto streamId =
-          client->createBidirectionalStreamInGroup(getNextGroupId());
-      CHECK(streamId.hasValue())
-          << "Failed to generate stream id in group: " << streamId.error();
-      client->setReadCallback(*streamId, this);
-      pendingOutput_[*streamId].append(folly::IOBuf::copyBuffer(message));
-      sendMessage(*streamId, pendingOutput_[*streamId]);
-    };
-
-    // loop until Ctrl+D
-    while (!closed && std::getline(std::cin, message)) {
-      if (message.empty()) {
-        continue;
-      }
-      evb->runInEventBaseThreadAndWait([=, this] {
-        if (enableStreamGroups_) {
-          sendMessageInStreamGroup();
-        } else {
-          sendMessageInStream();
-        }
-      });
-    }
-    LOG(INFO) << "EchoClient stopping client";
   }
 
 
@@ -330,28 +319,99 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
     return streamGroups_[(curGroupIdIdx_++) % kNumTestStreamGroups];
   }
 
-  void sendMessage(quic::StreamId id, BufQueue& data) {
+  void sendMessage(quic::StreamId id, BufQueue& data, uint64_t fileId) {
+    // LOG(INFO) << "Sending file with ID=" << fileId;
     auto message = data.move();
     auto res = quicClient_->writeChain(id, message->clone(), false);
     if (res.hasError()) {
-        LOG(ERROR) << "EchoClient writeChain error=" << uint32_t(res.error());
+        auto error = res.error();
+        if (error == quic::LocalErrorCode::STREAM_LIMIT_EXCEEDED) {
+            // LOG(WARNING) << "Buffer full for file ID=" << fileId << ". Scheduling retry.";
+            scheduleRetry(id, std::move(message), fileId);
+        } else {
+            LOG(ERROR) << "writeChain error for file ID=" << fileId << ": " << quic::toString(error);
+            isSending_ = false;
+            // Handle other errors if necessary
+        }
     } else {
-        LOG(INFO) << "Sent on stream=" << id;
+        auto sendTimeNs = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        {
+            std::ofstream outFile("../../../../research/log_sent_timestamp.txt", std::ios::app);
+            outFile << "FileID: " << fileId << " SendTime: " << sendTimeNs << " ns" << std::endl;
+        }
+        LOG(INFO) << "Sent file with ID=" << fileId;
+        processRetryFile(); // Proceed the pending writes
     }
-    pendingOutput_.erase(id);
   }
 
-  // Member variable to store the cached file data
-  std::shared_ptr<folly::IOBuf> cachedFileData;
+
+
+  void scheduleRetry(quic::StreamId id, std::unique_ptr<folly::IOBuf> message, uint64_t fileId) {
+    evb_->runAfterDelay(
+        [this, id, message = std::move(message), fileId]() mutable {
+            // LOG(INFO) << "Retrying file with ID=" << fileId;
+            BufQueue data;
+            data.append(std::move(message));
+            sendMessage(id, data, fileId);
+        },
+    0); // Setting a small delay of 3ms
+}
+
+
+
 
   void scheduleSends(folly::EventBase* evb) {
+    evb_ = evb;
     loadFileIntoMemory(); // Load the file once
-    for (uint64_t i = 0; i < 300; ++i) {
-        evb->runAfterDelay([this, evb, i]() {
-            sendFile(evb, i);
-        }, i * 10); // Schedule each send 10ms apart
+    for (uint64_t i = 0; i < totalFiles_; ++i) {
+        fileQueue_.push(i);
+    }
+    streamId_= stream0Open_ ? 0 : quicClient_->createBidirectionalStream().value();
+    stream0Open_ = true;
+    quicClient_->setReadCallback(streamId_, this);
+    // Start sending files every 10ms
+    periodicSend(0);
+  }
+
+  void periodicSend(uint64_t count) {
+    if (count >= 300) {
+        LOG(INFO) << "All files have been sent.";
+        return;
+    }
+    processNextFile();
+    evb_->runAfterDelay([this, count] { periodicSend(count + 1); }, 10);
+}
+
+
+  void processNextFile() {
+    if (fileQueue_.empty()) {
+        return;
+    }
+    uint64_t fileId = fileQueue_.front();
+    LOG(INFO) << "Processing file with ID=" << fileId;
+    fileQueue_.pop();
+    if (isSending_) {
+        retryQueue_.push(fileId);
+        return;
+    }
+    if(retryQueue_.size() == 0 and isSending_ == false){
+      LOG(INFO) << "Normal sending file with ID=" << fileId;
+      isSending_ = true; // Set the flag indicating a send is in progress
+      sendFile(fileId);        
     }
   }
+
+  void processRetryFile() {
+    if (retryQueue_.empty()) {
+      isSending_ = false;
+      return;
+    }
+    uint64_t fileId = retryQueue_.front();
+    retryQueue_.pop();
+    LOG(INFO) << "Sending the Retrying Queue file with ID=" << fileId;
+    sendFile(fileId);
+  }
+
 
   void loadFileIntoMemory() {
     // Open the file
@@ -369,32 +429,22 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
     cachedFileData = folly::IOBuf::copyBuffer(fileData.data(), fileData.size());
   }
 
-  bool stream0Open_ = false;  // Track if stream 0 is open, added for UROP testing
-  void sendFile(folly::EventBase* evb, uint64_t fileId) {
+  void sendFile(uint64_t fileId) {
     if (!cachedFileData) {
         LOG(ERROR) << "File data not loaded";
+        isSending_ = false;
         return;
     }
-    // Create a header with the file ID
     std::string header = "FileID:" + std::to_string(fileId) + "|";
     auto headerBuf = folly::IOBuf::copyBuffer(header);
     auto ioBuf = cachedFileData->clone();
     headerBuf->appendChain(std::move(ioBuf));
-    // Use stream ID 0 or create a new one if not open
-    auto streamId = stream0Open_ ? 0 : quicClient_->createBidirectionalStream().value();
-    stream0Open_ = true;
-    quicClient_->setReadCallback(streamId, this);
-    pendingOutput_[streamId].append(std::move(headerBuf));
-    LOG(INFO) << "Trying to sendMessage on streamID=" << streamId;
-    // Record the send timestamp with the file ID
-    auto sendTimeNs = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-    {
-        std::ofstream outFile("../../../../research/log_sent_timestamp.txt", std::ios::app);
-        outFile << "FileID: " << fileId << " SendTime: " << sendTimeNs << " ns" << std::endl;
-    }
-    sendMessage(streamId, pendingOutput_[streamId]);
-    // LOG(INFO) << "Sent message on streamID=" << streamId;
-  }
+    BufQueue data;
+    data.append(std::move(headerBuf));
+    LOG(INFO) << "Trying to send file with ID=" << fileId;
+    sendMessage(streamId_, data, fileId);
+}
+
 
 
 
@@ -426,7 +476,17 @@ class EchoClient : public quic::QuicSocket::ConnectionSetupCallback,
 
     return fizzCLientCtx;
   }
-
+  
+  //urop code
+  folly::EventBase* evb_;
+  std::queue<uint64_t> fileQueue_; // Queue to manage file sending order
+  std::queue<uint64_t> retryQueue_;   // Queue to manage files that need to be retried
+  uint64_t totalFiles_ = 300;      
+  quic::StreamId streamId_;        
+  bool isSending_ = false;         // Flag to indicate if a send is in progress
+  std::shared_ptr<folly::IOBuf> cachedFileData; // Cached file data
+  bool stream0Open_ = false;  // Track if stream 0 is open, added for UROP testing
+  //urop code end
   std::string host_;
   uint16_t port_;
   bool useDatagrams_;

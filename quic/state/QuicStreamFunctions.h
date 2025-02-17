@@ -18,7 +18,7 @@ namespace quic {
  *
  * @throws QuicTransportException on error.
  */
-void writeDataToQuicStream(QuicStreamState& stream, Buf data, bool eof);
+std::pair<bool, uint64_t> writeDataToQuicStream(QuicStreamState& stream, Buf data, bool eof);
 
 /**
  * Adds data represented in the form of BufferMeta to the end of the Buffer

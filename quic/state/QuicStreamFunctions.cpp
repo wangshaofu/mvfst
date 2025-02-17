@@ -27,32 +27,37 @@ void prependToBuf(quic::Buf& buf, quic::Buf toAppend) {
 
 namespace quic {
 
-void writeDataToQuicStream(QuicStreamState& stream, Buf data, bool eof) {
-  auto neverWrittenBufMeta = (0 == stream.writeBufMeta.offset);
-  uint64_t len = 0;
-  if (data) {
-    len = data->computeChainDataLength();
+std::pair<bool, uint64_t> writeDataToQuicStream(QuicStreamState& stream, Buf data, bool eof) {
+  uint64_t len = data ? data->computeChainDataLength() : 0;
+
+  // Maximum buffer size in bytes
+  const uint64_t maxBufferSize = 512000000; // 102400 bytes
+
+  uint64_t currentBufferSize = stream.writeBuffer.chainLength();
+
+    // Check if adding new data exceeds max buffer size
+  if (currentBufferSize + len > maxBufferSize) {
+    uint64_t availableBytes = maxBufferSize > currentBufferSize ? maxBufferSize - currentBufferSize : 0;
+      // Return failure and available bytes
+      return {false, availableBytes};
   }
-  // Disallow writing any data or EOF when there's buf meta data already.
-  CHECK(neverWrittenBufMeta);
-  // Also disallow writing an EOF at the end of real data when there's going
-  // to be buf meta data in the future.
-  LOG_IF(FATAL, eof && stream.dsrSender)
-      << "Trying to write eof on normal data for DSR stream: " << &stream;
-  if (len > 0) {
-    // We call this before updating the writeBuffer because we only want to
-    // write a blocked frame first time the stream becomes blocked
-    maybeWriteBlockAfterAPIWrite(stream);
-  }
+
+  // Existing logic
   stream.pendingWrites.append(data);
   stream.writeBuffer.append(std::move(data));
+
   if (eof) {
     auto bufferSize = stream.pendingWrites.chainLength();
     stream.finalWriteOffset = stream.currentWriteOffset + bufferSize;
   }
+
   updateFlowControlOnWriteToStream(stream, len);
   stream.conn.streamManager->updateWritableStreams(stream);
+
+    // Return success
+  return {true, 0};
 }
+
 
 void writeBufMetaToQuicStream(
     QuicStreamState& stream,

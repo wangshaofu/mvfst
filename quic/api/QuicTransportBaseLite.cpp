@@ -314,7 +314,16 @@ QuicSocketLite::WriteResult QuicTransportBaseLite::writeChain(
       wasAppLimitedOrIdle = conn_->congestionController->isAppLimited();
       wasAppLimitedOrIdle |= conn_->streamManager->isAppIdle();
     }
-    writeDataToQuicStream(*stream, std::move(data), eof);
+
+    auto [success, availableBytes] = writeDataToQuicStream(*stream, std::move(data), eof);
+    if (!success) {
+      // Buffer is full, return existing error code with a detailed message
+      // LOG(WARNING) << "Buffer full on stream " << id
+      //              << ". Available bytes: " << availableBytes;
+      // todo: change borrow STREAM_LIMIT_EXCEEDED to use 
+      return folly::makeUnexpected(LocalErrorCode::STREAM_LIMIT_EXCEEDED);
+    }
+
     // If we were previously app limited restart pacing with the current rate.
     if (wasAppLimitedOrIdle && conn_->pacer) {
       conn_->pacer->reset();
