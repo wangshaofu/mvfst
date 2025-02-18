@@ -31,12 +31,14 @@ std::pair<bool, uint64_t> writeDataToQuicStream(QuicStreamState& stream, Buf dat
   uint64_t len = data ? data->computeChainDataLength() : 0;
 
   // Maximum buffer size in bytes
-  const uint64_t maxBufferSize = 512000000; // 102400 bytes
+  const uint64_t maxBufferSize = 512000; // 512000 bytes
 
   uint64_t currentBufferSize = stream.writeBuffer.chainLength();
-
-    // Check if adding new data exceeds max buffer size
-  if (currentBufferSize + len > maxBufferSize) {
+  LOG(INFO) << "self: not yet write, current writeBuffer size: " << currentBufferSize;
+  auto bytesBuffered = stream.conn.flowControlState.sumCurStreamBufferLen; // temp added for test
+  LOG(INFO) << "self: not yet write, current sumCurStreamBufferLen: " << bytesBuffered; 
+  // Check if adding new data exceeds max buffer size
+  if (currentBufferSize + len > maxBufferSize) { //!!!using sumCurStreamBufferLen sin is accurate
     uint64_t availableBytes = maxBufferSize > currentBufferSize ? maxBufferSize - currentBufferSize : 0;
       // Return failure and available bytes
       return {false, availableBytes};
@@ -45,15 +47,16 @@ std::pair<bool, uint64_t> writeDataToQuicStream(QuicStreamState& stream, Buf dat
   // Existing logic
   stream.pendingWrites.append(data);
   stream.writeBuffer.append(std::move(data));
-
   if (eof) {
     auto bufferSize = stream.pendingWrites.chainLength();
     stream.finalWriteOffset = stream.currentWriteOffset + bufferSize;
   }
 
   updateFlowControlOnWriteToStream(stream, len);
-  stream.conn.streamManager->updateWritableStreams(stream);
-
+  stream.conn.streamManager->updateWritableStreams(stream); // this is also important
+  LOG(INFO) << "self: written, current writeBuffer size: " << stream.writeBuffer.chainLength();
+  LOG(INFO) << "self: written, current sumCurStreamBufferLen: " << stream.conn.flowControlState.sumCurStreamBufferLen;
+  
     // Return success
   return {true, 0};
 }
